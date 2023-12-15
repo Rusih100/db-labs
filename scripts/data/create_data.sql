@@ -13,11 +13,10 @@ SET @students_limit = 1000;
 SET @current_year = 2023;
 
 -- Оценки
-SET @grade_min = 3;
+SET @grade_min = 2;
 SET @grade_max = 5;
 
 ###########################
-
 
 START TRANSACTION;
 
