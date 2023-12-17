@@ -1,6 +1,5 @@
 START TRANSACTION;
 
-
 # ТАБЛИЦЫ
 
 -- Таблица: Учебные группы
@@ -143,5 +142,301 @@ CREATE OR REPLACE VIEW student_grants AS
         student_id
     HAVING MIN(g.grade) > 3;
 
+
+# ПРОЦЕДУРЫ
+
+# БАЗОВЫЕ ПРОЦЕДУРЫ ГЕНЕРАЦИИ СЛУЧАЙНЫХ ДАННЫХ
+
+-- Случайное целое число в пределах
+CREATE FUNCTION IF NOT EXISTS RAND_INT(start_value INT, end_value INT)
+    RETURNS INT
+BEGIN
+    DECLARE num INT;
+    SET num = ROUND(
+        RAND() * (end_value - start_value) + start_value
+    );
+    RETURN num;
+END;
+
+-- Случайная согласная
+CREATE FUNCTION IF NOT EXISTS RAND_CONSONANT() RETURNS VARCHAR(1)
+BEGIN
+    DECLARE all_consonants VARCHAR(21) DEFAULT 'бвгджзйклмнпрстфхцчшщ';
+    DECLARE consonant VARCHAR(1);
+    SET consonant = SUBSTRING(
+        all_consonants,
+        RAND_INT(1, 21),
+        1
+    );
+    RETURN consonant;
+END;
+
+-- Случайная гласная
+CREATE FUNCTION IF NOT EXISTS RAND_VOWEL() RETURNS VARCHAR(1)
+BEGIN
+    DECLARE all_vowels VARCHAR(9) DEFAULT 'аеиоуыэюя';
+    DECLARE vowel CHAR;
+    SET vowel = SUBSTRING(
+        all_vowels,
+        RAND_INT(1, 9),
+        1
+    );
+    RETURN vowel;
+END;
+
+-- Случайное слово
+CREATE FUNCTION IF NOT EXISTS RAND_WORD(length INT) RETURNS TEXT
+BEGIN
+    DECLARE word TEXT DEFAULT '';
+    DECLARE i INT DEFAULT 0;
+    DECLARE is_consonant BOOLEAN DEFAULT true;
+    WHILE i < length DO
+        SET word = CONCAT(
+            word,
+            IF(
+                is_consonant,
+                RAND_CONSONANT(),
+                RAND_VOWEL()
+            )
+        );
+        IF (i = 0) THEN
+            SET word = UPPER(word);
+        END IF;
+
+        SET is_consonant = NOT is_consonant;
+        SET i = i + 1;
+    END WHILE;
+    RETURN word;
+END;
+
+# ПРОЦЕДУРЫ ГЕНЕРАЦИИ СЛУЧАЙНЫХ ДАННЫХ СО ВСТАВКОЙ В ТАБЛИЦУ
+
+-- Генерация студентов. привязанных к учебным группам
+CREATE PROCEDURE IF NOT EXISTS GENERATE_STUDENTS_BY_STUDY_GROUPS(
+    IN _study_group_id INT,
+    IN rows_number_min INT,
+    IN rows_number_max INT,
+    IN students_limit INT
+)
+BEGIN
+    DECLARE i INT;
+    DECLARE row_count INT;
+
+    SET i = (SELECT COUNT(student_id) FROM students) + 1;
+    SET row_count = i + RAND_INT(rows_number_min, rows_number_max);
+
+    WHILE (i < row_count AND i < students_limit) DO
+        INSERT INTO
+            students(student_name, gender, birth_date, admission_date, address, study_group_id)
+        SELECT
+            CONCAT(
+                RAND_WORD(RAND_INT(10, 40)), ' ',
+                RAND_WORD(1), '.',
+                RAND_WORD(1), '.'
+            ) AS student_name,
+            IF (RAND_INT(0, 1) = 1, 'm', 'f') AS gender,
+            STR_TO_DATE(
+                CONCAT(
+                    RAND_INT(1, 28), '-',
+                    RAND_INT(1, 12), '-',
+                    sg.year - sg.course - 17
+                ), '%d-%m-%Y'
+            ) AS birth_date,
+            STR_TO_DATE(
+                CONCAT(
+                    '01-09-', sg.year - sg.course + 1
+                ), '%d-%m-%Y'
+            ) AS admission_date,
+             RAND_WORD(RAND_INT(30, 90)) AS address,
+             _study_group_id AS study_group_id
+        FROM
+            study_groups AS sg
+        WHERE sg.study_group_id = _study_group_id;
+        SET i = i + 1;
+    END WHILE;
+END;
+
+-- Генерация учебных групп и студентов
+CREATE PROCEDURE IF NOT EXISTS GENERATE_STUDY_GROUPS_AND_STUDENTS(
+    IN rows_number_min INT,
+    IN rows_number_max INT,
+    IN study_groups_limit INT,
+    IN students_limit INT
+)
+BEGIN
+    DECLARE i INT;
+    DECLARE row_count INT;
+    DECLARE id INT;
+
+    SET i = (SELECT COUNT(study_group_id) FROM study_groups) + 1;
+    SET row_count = i + RAND_INT(rows_number_min, rows_number_max);
+
+    WHILE (i < row_count AND i < study_groups_limit) DO
+        -- Генерируем случайную учебную группу
+        INSERT INTO study_groups(group_code, course, year)
+        SELECT
+            CONCAT(
+                UPPER(RAND_WORD(4)),
+                '-',
+                RAND_INT(100, 900)
+            ) AS group_code,
+            RAND_INT(1, 6) AS course,
+           2023 AS year;
+
+        -- Получаем id вставленной записи и для нее генерируем студентов
+        SET id = (SELECT MAX(study_group_id) FROM study_groups);
+        CALL GENERATE_STUDENTS_BY_STUDY_GROUPS(
+            id, rows_number_min, rows_number_max, students_limit
+         );
+        SET i = i + 1;
+    END WHILE;
+END;
+
+-- Генерация оценок, привязанных к дисциплине
+CREATE PROCEDURE IF NOT EXISTS GENERATE_GRADES(IN _discipline_id INT)
+BEGIN
+    INSERT INTO grades(grade, semester, student_id, discipline_id)
+    SELECT
+        RAND_INT(2, 5) AS grade,
+        (sg.course * 2) AS semester,
+        s.student_id AS student_id,
+        _discipline_id AS discipline_id
+    FROM
+        students AS s
+        JOIN study_groups AS sg USING (study_group_id);
+END;
+
+-- Генерация дисциплин и оценок
+CREATE PROCEDURE IF NOT EXISTS GENERATE_DISCIPLINES_AND_GRADES(
+    IN rows_number_min INT,
+    IN rows_number_max INT,
+    IN disciplines_limit INT
+)
+BEGIN
+    DECLARE i INT;
+    DECLARE row_count INT;
+    DECLARE id INT;
+
+    SET i = (SELECT COUNT(discipline_id) FROM disciplines) + 1;
+    SET row_count = i + RAND_INT(rows_number_min, rows_number_max);
+
+    WHILE (i < row_count AND i < disciplines_limit) DO
+        -- Генерируем случайную дисциплину
+        INSERT INTO disciplines(name, hours_amount)
+        SELECT
+            RAND_WORD(RAND_INT(30, 90)) AS name,
+            RAND_INT(30, 300) AS hours_amount;
+
+        -- Добавляем оценки по данной дисциплине всем студентам
+        SET id = (SELECT MAX(discipline_id) FROM disciplines);
+        CALL GENERATE_GRADES(id);
+        SET i = i + 1;
+    END WHILE;
+END;
+
+-- Общая процедура генерации данных в таблицу
+CREATE PROCEDURE IF NOT EXISTS GENERATE_DATA(
+    IN rows_number_min INT,
+    IN rows_number_max INT,
+    IN study_groups_limit INT,
+    IN students_limit INT,
+    IN disciplines_limit INT
+)
+BEGIN
+    CALL GENERATE_STUDY_GROUPS_AND_STUDENTS(
+        rows_number_min, rows_number_max, study_groups_limit, students_limit
+    );
+    CALL GENERATE_DISCIPLINES_AND_GRADES(
+        rows_number_min, rows_number_max, disciplines_limit
+    );
+END;
+
+# ПРОЦЕДУРЫ ОБНОВЛЕНИЯ ДАННЫХ
+
+-- Обновление случайного процента от всех данных
+CREATE PROCEDURE IF NOT EXISTS UPDATE_DATA(
+    IN percent FLOAT
+)
+BEGIN
+    UPDATE study_groups
+        SET group_code = CONCAT(group_code, '-', 2313)
+    WHERE RAND() <= percent;
+
+    UPDATE students
+        SET address = NULL
+    WHERE RAND() <= percent;
+
+    UPDATE disciplines
+        SET hours_amount = hours_amount * 2
+    WHERE RAND() <= percent;
+
+    UPDATE grades
+        SET grade = 5
+    WHERE RAND() <= percent;
+END;
+
+# ИНФОРМАЦИОННЫЕ ПРОЦЕДУРЫ
+
+-- Процедура для получения количества всех записей и количества обновленных записей во всех таблицах
+CREATE PROCEDURE IF NOT EXISTS GET_TABLES_COUNT()
+BEGIN
+    -- Переменные для курсора (Для того чтобы-читать таблицу построчно)
+    DECLARE done INT DEFAULT FALSE;
+    DECLARE table_name_cursor VARCHAR(512) DEFAULT FALSE;
+
+    -- Курсор по именам существующих таблиц в схеме
+    DECLARE tables_cursor CURSOR FOR
+        SELECT t.TABLE_NAME
+        FROM information_schema.TABLES AS t
+        WHERE
+            t.TABLE_SCHEMA = 'mysql_labs' AND
+            t.TABLE_TYPE = 'BASE TABLE';
+
+    -- Обработка ошибок курсора
+    DECLARE CONTINUE HANDLER FOR NOT FOUND SET done = TRUE;
+
+    -- Временная таблица
+    CREATE TEMPORARY TABLE IF NOT EXISTS tables_count(
+        table_name          VARCHAR(512) NOT NULL,
+        rows_count          INT          NOT NULL,
+        updated_rows_count  INT          NOT NULL
+    );
+
+    -- Основа динамического запроса
+    SET @dynamic_query = 'INSERT INTO tables_count(table_name, rows_count, updated_rows_count) ';
+    SET @is_first = TRUE;
+
+    -- Цикл чтения
+    OPEN tables_cursor;
+    tables_loop: LOOP
+        FETCH tables_cursor INTO table_name_cursor;
+        IF done THEN
+            LEAVE tables_loop;
+        END IF;
+
+        IF NOT @is_first THEN
+            SET @dynamic_query = CONCAT(
+                @dynamic_query, 'UNION '
+            );
+        ELSE
+            SET @is_first = FALSE;
+        END IF;
+
+        SET @dynamic_query = CONCAT(
+            @dynamic_query,
+            '',
+            'SELECT \'', table_name_cursor, '\', COUNT(*), COUNT(CASE WHEN _created_at <> _updated_at THEN 1 ELSE NULL END) ',
+            'FROM ', table_name_cursor, ' '
+        );
+    END LOOP;
+    CLOSE tables_cursor;
+    SELECT @dynamic_query;
+    PREPARE stmt FROM @dynamic_query;
+    EXECUTE stmt;
+    DEALLOCATE PREPARE stmt;
+
+    SELECT * FROM tables_count;
+    DROP TABLE IF EXISTS TABLES_COUNT;
+END;
 
 COMMIT;
