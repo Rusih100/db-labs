@@ -142,6 +142,27 @@ CREATE OR REPLACE VIEW student_grants AS
         student_id
     HAVING MIN(g.grade) > 3;
 
+CREATE OR REPLACE VIEW disciplines_report AS
+    SELECT
+        d.discipline_id,
+        d.name AS discipline_name,
+        d.hours_amount,
+        sg.study_group_id,
+        sg.group_code,
+        sg.year,
+        sg.course,
+        g.grade,
+        g.semester,
+        s.student_name,
+        s.gender,
+        s.birth_date,
+        s.address
+    FROM
+        disciplines AS d
+        JOIN grades AS g USING (discipline_id)
+        JOIN students AS s USING (student_id)
+        JOIN study_groups AS sg USING (study_group_id)
+    ORDER BY student_name;
 
 # ПРОЦЕДУРЫ
 
@@ -363,7 +384,7 @@ BEGIN
     WHERE RAND() <= percent;
 
     UPDATE students
-        SET address = NULL
+        SET address = 'Кампус'
     WHERE RAND() <= percent;
 
     UPDATE disciplines
@@ -437,6 +458,108 @@ BEGIN
 
     SELECT * FROM tables_count;
     DROP TABLE IF EXISTS TABLES_COUNT;
+END;
+
+# ПРОЦЕДУРЫ ДЛЯ ОТЧЕТА
+
+-- Отчет, студенты одной группы претендующие на стипендию
+CREATE PROCEDURE IF NOT EXISTS REPORT_STUDY_GRANTS_BY_GROUP(
+    IN _study_group_id INT
+)
+BEGIN
+    SET @i = 0;
+
+    -- Информация о группе
+    SELECT
+        group_code AS 'Код учебной группы',
+        course AS 'Курс',
+        year AS 'Год'
+    FROM study_groups
+    WHERE study_group_id = _study_group_id;
+
+    -- Студенты
+    WITH study_grants_group AS (
+        SELECT
+            *
+        FROM student_grants
+        WHERE study_group_id = _study_group_id
+        ORDER BY student_name
+    )
+    SELECT
+        @i := @i + 1 AS '№',
+        student_name AS 'Имя студента',
+        gender AS 'Пол',
+        birth_date AS 'Дата рождения',
+        admission_date AS 'Дата поступления',
+        address AS 'Адрес'
+    FROM study_grants_group;
+END;
+
+-- Генерирует отчет с оценками для контретной учебной группы по конкретной дисциплине
+CREATE PROCEDURE IF NOT EXISTS REPORT_DISCIPLINE(
+    IN _discipline_id INT,
+    IN _study_group_id INT
+)
+BEGIN
+    SET @i = 0;
+
+    -- Таблица из View отфильтрованная по дисциплине и учебной группе
+    WITH group_table AS (
+        SELECT *
+        FROM disciplines_report
+        WHERE
+            study_group_id = _study_group_id AND
+            discipline_id = _discipline_id
+    )
+    -- Учебный год и семестр
+    (
+        SELECT
+            NULL AS ' ',
+            'Учебный год:' AS ' ',
+            CONCAT(year, '-', year + 1) AS ' ',
+            'Семестр:' AS ' ',
+            semester AS ' ',
+            NULL AS ' '
+        FROM group_table
+        LIMIT 1
+    )
+    UNION
+    -- Курс
+    (
+        SELECT
+            NULL, 'Курс:', course, NULL, NULL, NULL
+        FROM group_table
+        LIMIT 1
+    )
+    UNION
+    -- Дисциплина и количество часов
+    (
+        SELECT
+            NULL, 'Дисциплина:', discipline_name, 'Количество часов:', hours_amount, NULL
+        FROM group_table
+        LIMIT 1
+    )
+    UNION
+    -- Группа
+    (
+        SELECT
+            NULL, 'Группа:', group_code, NULL, NULL, NULL
+        FROM group_table
+        LIMIT 1
+    )
+    UNION
+    -- Заголовки таблицы студенты
+    SELECT '№', 'Ф.И.О.', 'Пол', 'Дата рождения', 'Место проживания', 'Оценка'
+    UNION
+    -- Наполнение таблицы студентов
+    SELECT
+        @i := @i + 1,
+        student_name,
+        gender,
+        birth_date,
+        address,
+        grade
+    FROM group_table;
 END;
 
 COMMIT;
